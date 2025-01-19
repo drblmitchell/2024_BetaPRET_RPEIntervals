@@ -1,0 +1,797 @@
+---
+title: "Effect of $\\beta$-blockade on reproducibility of heart rate, oxygen uptake and work rate across repeated bouts of short-duration perceptually regulated exercise"
+author: "Braden L. Mitchell, Ph.D."
+output:
+  pdf_document:
+    number_sections: true
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, comment = NA)
+options(tibble.print_max = Inf)
+```
+
+# Data preparation
+
+```{r libraries}
+library(dplyr)
+library(tidyr)
+library(lme4)      # v1.1.35.5
+library(lmerTest)  # v3.1.3
+library(emmeans)   # v1.10.5
+library(irr)       # v0.84.1
+```
+
+```{r mets_function}
+# Function to calculate METs using ACSM metabolic equation for treadmill running
+calculate_mets <- function(speed, grade) {
+  (3.5 + (0.2 * (speed * (1000 / 60))) + 
+     (0.9 * (speed * (1000 / 60)) * (grade / 100))) / 3.5
+}
+```
+
+```{r load_data}
+# Load intervals data
+intervals <- read.csv("../../Data/RPE_Intervals.csv")
+
+# Load GXT outcomes data
+gxt <- read.csv("../../Data/GXT_outcomes.csv") %>% 
+  mutate(mets_peak = calculate_mets(speed_peak, grade_peak)) %>% 
+  select(pid, condition, vo2kg_vt, hr_vt, vo2kg_peak, hr_peak, mets_peak) %>% 
+  filter(pid %in% unique(intervals$pid))
+
+# Load resting CV measures data
+rest_cv <- read.csv("../../Data/RestingCV_final.csv") %>% 
+  select(pid, condition, hr_60, sbp_60, dbp_60, spo2_60) %>% 
+  filter(pid %in% unique(intervals$pid))
+```
+
+```{r prepare_intervals_data}
+# Prepare intervals data
+intervals <- intervals %>% 
+  left_join(gxt, by = c("pid", "condition")) %>% 
+  # Define condition & intensity as factors
+  mutate(
+    condition = factor(condition, c(0, 1), c("control", "bblockade")),
+    intensity = factor(intensity, c(13, 15), c("rpe13", "rpe15"))
+  ) %>% 
+  # Calculate secondary variables
+  mutate(
+    mets = calculate_mets(speed, grade),
+    pct_vo2kg_vt = (vo2kg / vo2kg_vt) * 100,
+    pct_vo2kg_peak = (vo2kg / vo2kg_peak) * 100,
+    pct_hr_vt = (hr / hr_vt) * 100,
+    pct_hr_peak = (hr / hr_peak) * 100,
+    pct_mets_peak = (mets / mets_peak) * 100,
+  )
+```
+
+# Preliminary analyses
+
+```{r pivot_rest_cv}
+# Transform resting CV measures to wide format
+rest_cv_wide <- rest_cv %>% 
+  mutate(condition = factor(condition, c(0, 1), c("control", "bblockade"))) %>%
+  pivot_wider(names_from = condition, values_from = c(hr_60:spo2_60))
+```
+
+```{r, pivot_gxt_data}
+# Transform GXT outcomes to wide format
+gxt_wide <- gxt %>% 
+  mutate(condition = factor(condition, c(0, 1), c("control", "bblockade"))) %>%
+  pivot_wider(names_from = condition, values_from = c(vo2kg_vt:mets_peak))
+```
+
+## Difference in resting cardiovascular measures between conditions
+
+```{r ttest_hr_rest}
+# Difference in resting HR, B-blockade vs. Control
+t.test(rest_cv_wide$hr_60_bblockade, rest_cv_wide$hr_60_control, paired = TRUE)
+```
+
+```{r ttest_sbp_rest}
+# Difference in resting systolic BP, B-blockade vs. Control
+t.test(rest_cv_wide$sbp_60_bblockade, rest_cv_wide$sbp_60_control, paired = TRUE)
+```
+
+```{r ttest_dbp_rest}
+# Difference in resting diastolic BP, B-blockade vs. Control
+t.test(rest_cv_wide$dbp_60_bblockade, rest_cv_wide$dbp_60_control, paired = TRUE)
+```
+
+```{r ttest_spo2_rest}
+# Difference in resting SpO2, B-blockade vs. Control
+t.test(rest_cv_wide$spo2_60_bblockade, rest_cv_wide$spo2_60_control, paired = TRUE)
+```
+
+## Difference in exercise responses between conditions
+
+```{r ttest_vo2kg_vt}
+# Difference in VO2kg @ VT, B-blockade vs. Control
+t.test(gxt_wide$vo2kg_vt_bblockade, gxt_wide$vo2kg_vt_control, paired = TRUE)
+```
+
+```{r ttest_vo2kg_peak}
+# Difference in peak VO2kg, B-blockade vs. Control
+t.test(gxt_wide$vo2kg_peak_bblockade, gxt_wide$vo2kg_peak_control, paired = TRUE)
+```
+
+```{r ttest_hr_vt}
+# Difference in HR @ VT, B-blockade vs. Control
+t.test(gxt_wide$hr_vt_bblockade, gxt_wide$hr_vt_control, paired = TRUE)
+```
+
+```{r ttest_hr_peak}
+# Difference in peak HR, B-blockade vs. Control
+t.test(gxt_wide$hr_peak_bblockade, gxt_wide$hr_peak_control, paired = TRUE)
+```
+
+```{r ttest_mets_peak}
+# Difference in peak work rate (METs), B-blockade vs. Control
+t.test(gxt_wide$mets_peak_bblockade, gxt_wide$mets_peak_control, paired = TRUE)
+```
+
+# Linear mixed-effects models
+
+## Heart rate
+
+```{r lmm_fit_hr_full}
+# Fit fully specified model for heart rate
+lmm_hr_full <- lmer(
+  hr ~ condition * intensity * bout_rpe + (1 | pid),
+  data = intervals
+)
+```
+
+```{r lmm_fit_hr_reduced}
+# Fit reduced model for heart rate without second-order interaction
+lmm_hr_reduced <- lmer(
+  hr ~ condition + intensity + bout_rpe + condition:intensity + 
+    condition:bout_rpe + intensity:bout_rpe + (1 | pid),
+  data = intervals
+)
+```
+
+```{r lmm_anova_hr}
+# Compare models via likelihood ratio test
+anova(lmm_hr_full, lmm_hr_reduced)
+```
+
+```{r}
+summary(lmm_hr_reduced)
+confint(lmm_hr_reduced)
+```
+
+```{r}
+# Pairwise comparisons for condition * intensity
+emmeans(lmm_hr_reduced, pairwise ~ condition * intensity)
+```
+
+```{r}
+# Planned contrasts between conditions within intensity
+summary(
+  emmeans(lmm_hr_reduced, pairwise ~ condition | intensity),
+  infer = TRUE
+)
+```
+
+```{r lmm_diagnostics_hr}
+plot(lmm_hr_reduced)
+
+qqnorm(residuals(lmm_hr_reduced))
+qqline(residuals(lmm_hr_reduced))
+```
+
+## %HRpeak
+
+```{r lmm_fit_pcthrpeak_full}
+# Fit fully specified model for %HRpeak
+lmm_pcthrpeak_full <- lmer(
+  pct_hr_peak ~ condition * intensity * bout_rpe + (1 | pid),
+  data = intervals
+)
+```
+
+```{r lmm_fit_pcthrpeak_reduced}
+# Fit reduced model for %HRpeak without second-order interaction
+lmm_pcthrpeak_reduced <- lmer(
+  pct_hr_peak ~ condition + intensity + bout_rpe + condition:intensity + 
+    condition:bout_rpe + intensity:bout_rpe + (1 | pid),
+  data = intervals
+)
+```
+
+```{r lmm_anova_pcthrpeak}
+# Compare models via likelihood ratio test
+anova(lmm_pcthrpeak_full, lmm_pcthrpeak_reduced)
+```
+
+```{r}
+summary(lmm_pcthrpeak_reduced)
+confint(lmm_pcthrpeak_reduced)
+```
+
+```{r}
+# Planned contrasts between conditions within intensity
+summary(
+  emmeans(lmm_pcthrpeak_reduced, pairwise ~ condition | intensity),
+  infer = TRUE
+)
+```
+
+```{r lmm_diagnostics_pcthrpeak}
+plot(lmm_pcthrpeak_reduced)
+
+qqnorm(residuals(lmm_pcthrpeak_reduced))
+qqline(residuals(lmm_pcthrpeak_reduced))
+```
+
+## Oxygen uptake
+
+```{r lmm_fit_vo2kg_full}
+# Fit fully specified model for oxygen uptake
+lmm_vo2kg_full <- lmer(
+  vo2kg ~ condition * intensity * bout_rpe + (1 | pid),
+  data = intervals
+)
+```
+
+```{r lmm_fit_vo2kg_reduced}
+# Fit reduced model for VO2kg without second-order interaction
+lmm_vo2kg_reduced <- lmer(
+  vo2kg ~ condition + intensity + bout_rpe + condition:intensity + 
+    condition:bout_rpe + intensity:bout_rpe + (1 | pid),
+  data = intervals
+)
+```
+
+```{r lmm_anova_vo2kg}
+# Compare models via likelihood ratio test
+anova(lmm_vo2kg_full, lmm_vo2kg_reduced)
+```
+
+```{r}
+summary(lmm_vo2kg_reduced)
+confint(lmm_vo2kg_reduced)
+```
+
+```{r}
+# Planned contrasts between conditions within intensity
+summary(
+  emmeans(lmm_vo2kg_reduced, pairwise ~ condition | intensity),
+  infer = TRUE
+)
+```
+
+```{r lmm_diagnostics_vo2kg}
+plot(lmm_vo2kg_reduced)
+
+qqnorm(residuals(lmm_vo2kg_reduced))
+qqline(residuals(lmm_vo2kg_reduced))
+```
+
+## %VO2peak
+
+```{r lmm_fit_pctvo2kgpeak_full}
+# Fit fully specified model for %VO2peak
+lmm_pctvo2kgpeak_full <- lmer(
+  pct_vo2kg_peak ~ condition * intensity * bout_rpe + (1 | pid),
+  data = intervals
+)
+```
+
+```{r lmm_fit_pctvo2kgpeak_reduced}
+# Fit reduced model for %VO2peak without second-order interaction
+lmm_pctvo2kgpeak_reduced <- lmer(
+  pct_vo2kg_peak ~ condition + intensity + bout_rpe + condition:intensity + 
+    condition:bout_rpe + intensity:bout_rpe + (1 | pid),
+  data = intervals
+)
+```
+
+```{r lmm_anova_pctvo2kgpeak}
+# Compare models via likelihood ratio test
+anova(lmm_pctvo2kgpeak_full, lmm_pctvo2kgpeak_reduced)
+```
+
+```{r}
+summary(lmm_pctvo2kgpeak_reduced)
+confint(lmm_pctvo2kgpeak_reduced)
+```
+
+```{r}
+# Planned contrasts between conditions within intensity
+summary(
+  emmeans(lmm_pctvo2kgpeak_reduced, pairwise ~ condition | intensity),
+  infer = TRUE
+)
+```
+
+```{r lmm_diagnostics_pctvo2kgpeak}
+plot(lmm_pctvo2kgpeak_reduced)
+
+qqnorm(residuals(lmm_pctvo2kgpeak_reduced))
+qqline(residuals(lmm_pctvo2kgpeak_reduced))
+```
+
+## Work rate (METs)
+
+```{r lmm_fit_mets_full}
+# Fit fully specified model for METs
+lmm_mets_full <- lmer(
+  mets ~ condition * intensity * bout_rpe + (1 | pid),
+  data = intervals
+)
+```
+
+```{r lmm_fit_mets_reduced}
+# Fit reduced model for METs without second-order interaction
+lmm_mets_reduced <- lmer(
+  mets ~ condition + intensity + bout_rpe + condition:intensity + 
+    condition:bout_rpe + intensity:bout_rpe + (1 | pid),
+  data = intervals
+)
+```
+
+```{r lmm_anova_mets}
+# Compare models via likelihood ratio test
+anova(lmm_mets_full, lmm_mets_reduced)
+```
+
+```{r}
+summary(lmm_mets_reduced)
+confint(lmm_mets_reduced)
+```
+
+```{r}
+# Planned contrasts between conditions within intensity
+summary(
+  emmeans(lmm_mets_reduced, pairwise ~ condition | intensity),
+  infer = TRUE
+)
+```
+
+```{r lmm_diagnostics_mets}
+plot(lmm_mets_reduced)
+
+qqnorm(residuals(lmm_mets_reduced))
+qqline(residuals(lmm_mets_reduced))
+```
+
+## %WRpeak (%METpeak)
+
+```{r lmm_fit_pctmetspeak_full}
+# Fit fully specified model for %METpeak
+lmm_pctmetspeak_full <- lmer(
+  pct_mets_peak ~ condition * intensity * bout_rpe + (1 | pid),
+  data = intervals
+)
+```
+
+```{r lmm_fit_pctmetspeak_reduced}
+# Fit reduced model for %METpeak without second-order interaction
+lmm_pctmetspeak_reduced <- lmer(
+  pct_mets_peak ~ condition + intensity + bout_rpe + condition:intensity + 
+    condition:bout_rpe + intensity:bout_rpe + (1 | pid),
+  data = intervals
+)
+```
+
+```{r lmm_anova_pctmetspeak}
+# Compare models via likelihood ratio test
+anova(lmm_pctmetspeak_full, lmm_pctmetspeak_reduced)
+```
+
+```{r}
+summary(lmm_pctmetspeak_reduced)
+confint(lmm_pctmetspeak_reduced)
+```
+
+```{r}
+# Planned contrasts between conditions within intensity
+summary(
+  emmeans(lmm_pctmetspeak_reduced, pairwise ~ condition | intensity),
+  infer = TRUE
+)
+```
+
+```{r lmm_diagnostics_pctmetspeak}
+plot(lmm_pctmetspeak_reduced)
+
+qqnorm(residuals(lmm_pctmetspeak_reduced))
+qqline(residuals(lmm_pctmetspeak_reduced))
+```
+
+# Intraclass Correlations
+
+```{r}
+# Transform intervals data to wide format
+intervals_wide <- intervals %>%
+  select(-c(bout_session, speed:mets_peak)) %>%
+  pivot_wider(
+    names_from = c(condition, intensity, bout_rpe),
+    values_from = c(hr, pct_hr_vt, pct_hr_peak, vo2kg, pct_vo2kg_vt,
+                    pct_vo2kg_peak, mets, pct_mets_peak),
+    names_glue = "{gsub('_', '', .value)}_{condition}_{intensity}_{bout_rpe}"
+  )
+```
+
+```{r}
+fisherz_compare <- function(icc_control, icc_bblockade) {
+  fisher_z <- function(icc) {
+    0.5 * log((1 + icc) / (1 - icc))
+  }
+  
+  z_control <- fisher_z(icc_control$value)
+  z_bblockade  <- fisher_z(icc_bblockade$value)
+  
+  z_diff <- z_control - z_bblockade
+  se_diff <- sqrt(2 / (icc_control$subjects - 3))
+  
+  z_score  <- z_diff / se_diff
+  p_value <- 2 * (1 - pnorm(abs(z_score)))
+  
+  return(
+    list("z_diff" = z_diff, "z_score" = z_score, "p_value" = p_value)
+  )
+}
+```
+
+## Heart rate
+
+```{r}
+# ICC for Control, RPE 13
+icc_hr_control_13 <- intervals_wide %>% 
+  select(hr_control_rpe13_1:hr_control_rpe13_3) %>% 
+  icc("twoway", "agreement", "single")
+
+icc_hr_control_13
+```
+
+```{r}
+# ICC for B-blockade, RPE 13
+icc_hr_bblockade_13 <- intervals_wide %>% 
+  select(hr_bblockade_rpe13_1:hr_bblockade_rpe13_3) %>% 
+  icc("twoway", "agreement", "single")
+
+icc_hr_bblockade_13
+```
+
+```{r}
+# Fisher's z-transformation & z-test
+fisherz_compare(icc_hr_control_13, icc_hr_bblockade_13)
+```
+
+```{r}
+# ICC for Control, RPE 15
+icc_hr_control_15 <- intervals_wide %>% 
+  select(hr_control_rpe15_1:hr_control_rpe15_3) %>% 
+  icc("twoway", "agreement", "single")
+
+icc_hr_control_15
+```
+
+```{r}
+# ICC for B-blockade, RPE 15
+icc_hr_bblockade_15 <- intervals_wide %>% 
+  select(hr_bblockade_rpe15_1:hr_bblockade_rpe15_3) %>% 
+  icc("twoway", "agreement", "single")
+
+icc_hr_bblockade_15
+```
+
+```{r}
+# Fisher's z-transformation & z-test
+fisherz_compare(icc_hr_control_15, icc_hr_bblockade_15)
+```
+
+## %HRpeak
+
+```{r}
+# ICC for Control, RPE 13
+icc_pcthrpeak_control_13 <- intervals_wide %>% 
+  select(pcthrpeak_control_rpe13_1:pcthrpeak_control_rpe13_3) %>% 
+  icc("twoway", "agreement", "single")
+
+icc_pcthrpeak_control_13
+```
+
+```{r}
+# ICC for B-blockade, RPE 13
+icc_pcthrpeak_bblockade_13 <- intervals_wide %>% 
+  select(pcthrpeak_bblockade_rpe13_1:pcthrpeak_bblockade_rpe13_3) %>% 
+  icc("twoway", "agreement", "single")
+
+icc_pcthrpeak_bblockade_13
+```
+
+```{r}
+# Fisher's z-transformation & z-test
+fisherz_compare(icc_pcthrpeak_control_13, icc_pcthrpeak_bblockade_13)
+```
+
+```{r}
+# ICC for Control, RPE 15
+icc_pcthrpeak_control_15 <- intervals_wide %>% 
+  select(pcthrpeak_control_rpe15_1:pcthrpeak_control_rpe15_3) %>% 
+  icc("twoway", "agreement", "single")
+
+icc_pcthrpeak_control_15
+```
+
+```{r}
+# ICC for B-blockade, RPE 15
+icc_pcthrpeak_bblockade_15 <- intervals_wide %>% 
+  select(pcthrpeak_bblockade_rpe15_1:pcthrpeak_bblockade_rpe15_3) %>% 
+  icc("twoway", "agreement", "single")
+
+icc_pcthrpeak_bblockade_15
+```
+
+```{r}
+# Fisher's z-transformation & z-test
+fisherz_compare(icc_pcthrpeak_control_15, icc_pcthrpeak_bblockade_15)
+```
+
+## Oxygen uptake
+
+```{r}
+# ICC for Control, RPE 13
+icc_vo2kg_control_13 <- intervals_wide %>% 
+  select(vo2kg_control_rpe13_1:vo2kg_control_rpe13_3) %>% 
+  icc("twoway", "agreement", "single")
+
+icc_vo2kg_control_13
+```
+
+```{r}
+# ICC for B-blockade, RPE 13
+icc_vo2kg_bblockade_13 <- intervals_wide %>% 
+  select(vo2kg_bblockade_rpe13_1:vo2kg_bblockade_rpe13_3) %>% 
+  icc("twoway", "agreement", "single")
+
+icc_vo2kg_bblockade_13
+```
+
+```{r}
+# Fisher's z-transformation & z-test
+fisherz_compare(icc_vo2kg_control_13, icc_vo2kg_bblockade_13)
+```
+
+```{r}
+# ICC for Control, RPE 15
+icc_vo2kg_control_15 <- intervals_wide %>% 
+  select(vo2kg_control_rpe15_1:vo2kg_control_rpe15_3) %>% 
+  icc("twoway", "agreement", "single")
+
+icc_vo2kg_control_15
+```
+
+```{r}
+# ICC for B-blockade, RPE 15
+icc_vo2kg_bblockade_15 <- intervals_wide %>% 
+  select(vo2kg_bblockade_rpe15_1:vo2kg_bblockade_rpe15_3) %>% 
+  icc("twoway", "agreement", "single")
+
+icc_vo2kg_bblockade_15
+```
+
+```{r}
+# Fisher's z-transformation & z-test
+fisherz_compare(icc_vo2kg_control_15, icc_vo2kg_bblockade_15)
+```
+
+## %VO2peak
+
+```{r}
+# ICC for Control, RPE 13
+icc_pctvo2kgpeak_control_13 <- intervals_wide %>% 
+  select(pctvo2kgpeak_control_rpe13_1:pctvo2kgpeak_control_rpe13_3) %>% 
+  icc("twoway", "agreement", "single")
+
+icc_pctvo2kgpeak_control_13
+```
+
+```{r}
+# ICC for B-blockade, RPE 13
+icc_pctvo2kgpeak_bblockade_13 <- intervals_wide %>% 
+  select(pctvo2kgpeak_bblockade_rpe13_1:pctvo2kgpeak_bblockade_rpe13_3) %>% 
+  icc("twoway", "agreement", "single")
+
+icc_pctvo2kgpeak_bblockade_13
+```
+
+```{r}
+# Fisher's z-transformation & z-test
+fisherz_compare(icc_pctvo2kgpeak_control_13, icc_pctvo2kgpeak_bblockade_13)
+```
+
+```{r}
+# ICC for Control, RPE 15
+icc_pctvo2kgpeak_control_15 <- intervals_wide %>% 
+  select(pctvo2kgpeak_control_rpe15_1:pctvo2kgpeak_control_rpe15_3) %>% 
+  icc("twoway", "agreement", "single")
+
+icc_pctvo2kgpeak_control_15
+```
+
+```{r}
+# ICC for B-blockade, RPE 15
+icc_pctvo2kgpeak_bblockade_15 <- intervals_wide %>% 
+  select(pctvo2kgpeak_bblockade_rpe15_1:pctvo2kgpeak_bblockade_rpe15_3) %>% 
+  icc("twoway", "agreement", "single")
+
+icc_pctvo2kgpeak_bblockade_15
+```
+
+```{r}
+# Fisher's z-transformation & z-test
+fisherz_compare(icc_pctvo2kgpeak_control_15, icc_pctvo2kgpeak_bblockade_15)
+```
+
+## Work rate (METs)
+
+```{r}
+# ICC for Control, RPE 13
+icc_mets_control_13 <- intervals_wide %>% 
+  select(mets_control_rpe13_1:mets_control_rpe13_3) %>% 
+  icc("twoway", "agreement", "single")
+
+icc_mets_control_13
+```
+
+```{r}
+# ICC for B-blockade, RPE 13
+icc_mets_bblockade_13 <- intervals_wide %>% 
+  select(mets_bblockade_rpe13_1:mets_bblockade_rpe13_3) %>% 
+  icc("twoway", "agreement", "single")
+
+icc_mets_bblockade_13
+```
+
+```{r}
+# Fisher's z-transformation & z-test
+fisherz_compare(icc_mets_control_13, icc_mets_bblockade_13)
+```
+
+```{r}
+# ICC for Control, RPE 15
+icc_mets_control_15 <- intervals_wide %>% 
+  select(mets_control_rpe15_1:mets_control_rpe15_3) %>% 
+  icc("twoway", "agreement", "single")
+
+icc_mets_control_15
+```
+
+```{r}
+# ICC for B-blockade, RPE 15
+icc_mets_bblockade_15 <- intervals_wide %>% 
+  select(mets_bblockade_rpe15_1:mets_bblockade_rpe15_3) %>% 
+  icc("twoway", "agreement", "single")
+
+icc_mets_bblockade_15
+```
+
+```{r}
+# Fisher's z-transformation & z-test
+fisherz_compare(icc_mets_control_15, icc_mets_bblockade_15)
+```
+
+## %WRpeak (%METpeak)
+
+```{r}
+# ICC for Control, RPE 13
+icc_pctmetspeak_control_13 <- intervals_wide %>% 
+  select(pctmetspeak_control_rpe13_1:pctmetspeak_control_rpe13_3) %>% 
+  icc("twoway", "agreement", "single")
+
+icc_pctmetspeak_control_13
+```
+
+```{r}
+# ICC for B-blockade, RPE 13
+icc_pctmetspeak_bblockade_13 <- intervals_wide %>% 
+  select(pctmetspeak_bblockade_rpe13_1:pctmetspeak_bblockade_rpe13_3) %>% 
+  icc("twoway", "agreement", "single")
+
+icc_pctmetspeak_bblockade_13
+```
+
+```{r}
+# Fisher's z-transformation & z-test
+fisherz_compare(icc_pctmetspeak_control_13, icc_pctmetspeak_bblockade_13)
+```
+
+```{r}
+# ICC for Control, RPE 15
+icc_pctmetspeak_control_15 <- intervals_wide %>% 
+  select(pctmetspeak_control_rpe15_1:pctmetspeak_control_rpe15_3) %>% 
+  icc("twoway", "agreement", "single")
+
+icc_pctmetspeak_control_15
+```
+
+```{r}
+# ICC for B-blockade, RPE 15
+icc_pctmetspeak_bblockade_15 <- intervals_wide %>% 
+  select(pctmetspeak_bblockade_rpe15_1:pctmetspeak_bblockade_rpe15_3) %>% 
+  icc("twoway", "agreement", "single")
+
+icc_pctmetspeak_bblockade_15
+```
+
+```{r}
+# Fisher's z-transformation & z-test
+fisherz_compare(icc_pctmetspeak_control_15, icc_pctmetspeak_bblockade_15)
+```
+
+# Coefficients of variation
+
+```{r}
+calculate_cv <- function(x) {
+  (sd(x, na.rm = TRUE) / mean(x, na.rm = TRUE)) * 100
+}
+```
+
+```{r}
+intervals_cv <- intervals %>% 
+  group_by(pid, condition, intensity) %>% 
+  summarise(
+    hr = calculate_cv(hr),
+    vo2kg = calculate_cv(vo2kg),
+    mets = calculate_cv(mets),
+    .groups = "drop"
+  ) 
+```
+
+```{r}
+intervals_cv %>% 
+  pivot_wider(
+    names_from = c(condition, intensity),
+    values_from = c(hr, vo2kg, mets)
+  ) %>%
+  pivot_longer(
+    cols = !pid,
+    names_to = "outcome",
+    values_to = "cv"
+  ) %>% 
+  group_by(outcome) %>% 
+  summarise(
+    mean_cv = round(mean(cv, na.rm = TRUE), 1),
+    sd_cv = round(sd(cv, na.rm = TRUE), 1),
+    min_cv = round(min(cv, na.rm = TRUE), 1),
+    max_cv = round(max(cv, na.rm = TRUE), 1)
+  ) 
+```
+
+```{r}
+# ANOVA
+anova_hr_cv <- aov(
+  hr ~ intensity * condition + Error(pid / (intensity * condition)),
+  data = intervals_cv
+)
+
+summary(anova_hr_cv)
+```
+
+```{r}
+# ANOVA
+anova_vo2kg_cv <- aov(
+  vo2kg ~ intensity * condition + Error(pid / (intensity * condition)),
+  data = intervals_cv
+)
+
+summary(anova_vo2kg_cv)
+```
+
+```{r}
+# ANOVA
+anova_mets_cv <- aov(
+  mets ~ intensity * condition + Error(pid / (intensity * condition)),
+  data = intervals_cv
+)
+
+summary(anova_mets_cv)
+```
+
